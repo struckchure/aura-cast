@@ -1,7 +1,7 @@
 [package]
 name = "auracast-speaker"
 version = "0.1.0"
-description = "Turn desktop or mobile devices into high-fidelity Bluetooth & Wi-Fi speakers"
+description = "Stream audio between devices on the same Wi-Fi network"
 authors = ["AuraCast Audio Lab"]
 edition = "2021"
 
@@ -13,25 +13,20 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["tray-icon"] }
+tauri = { version = "2.0", features = [] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.37", features = ["full"] }
 
-# Low-latency Cross-platform Audio I/O
+# Cross-platform audio capture & playback (CoreAudio / WASAPI / AAudio)
 cpal = "0.15"
 
-# Codec & Decoding
-symphonia = { version = "0.5", features = ["all"] }
+# Opus codec for the network stream
 opus = "0.3"
 
-# Network Discovery & Multicast
+# Finding other AuraCast devices on the LAN
 mdns-sd = "0.11"
 
-# Linux BlueZ Bluetooth A2DP Sink (Target: Linux / Raspberry Pi)
-[target.'cfg(target_os = "linux")'.dependencies]
-bluez-async = "0.8"
-
-# macOS & iOS CoreBluetooth (Target: Apple)
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-objc2 = "0.5"
+# cpal's Android backend reads the JVM/Context from ndk-context, which Tauri
+# does not initialise; MainActivity hands them over through JNI (see android.rs)
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"

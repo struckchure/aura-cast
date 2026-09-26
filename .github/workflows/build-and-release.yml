@@ -122,9 +122,8 @@ jobs:
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Initialize Android Tauri Project
-        run: pnpm tauri android init --ci
-
+      # The Android project lives in src-tauri/gen/android (committed: it carries
+      # AuraCast's permissions and multicast lock), so no `tauri android init` here
       - name: Build Android Release APK
         run: pnpm tauri android build --apk --ci
         env:
@@ -187,14 +186,16 @@ jobs:
           tag_name: v2.3.${{ github.run_number }}
           name: 'AuraCast Release v2.3.${{ github.run_number }}'
           body: |
-            ## AuraCast Wireless Audio Speaker Release
-            
-            ### Included Multiplatform Binaries:
-            - **Android**: \`AuraCast-universal-release.apk\` (Low-latency audio sink & source)
-            - **Windows**: \`AuraCast_x64_en-US.msi\` & \`.exe\` (WASAPI audio driver)
-            - **macOS**: \`AuraCast_universal.dmg\` (Apple Silicon M1/M2/M3/M4 & Intel CoreAudio)
-            
-            *Automatically built by GitHub Actions on push to \`main\`.*
+            ## AuraCast
+
+            Stream audio between devices on the same Wi-Fi: one device broadcasts
+            (microphone, Windows system audio, or a test tone) and others play it.
+
+            - **Android**: `AuraCast-universal-release.apk`
+            - **Windows**: `.msi` or `-setup.exe` installer
+            - **macOS** (Apple Silicon & Intel): `.dmg`. The app is not notarized yet: right-click > Open the first time.
+
+            *Built by GitHub Actions from `${{ github.sha }}`.*
           files: |
             release-artifacts/**/*.apk
             release-artifacts/**/*.msi

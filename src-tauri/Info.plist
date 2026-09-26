@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the app bundle's Info.plist by Tauri -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AuraCast streams audio from your microphone or audio input to other devices on your network.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>AuraCast finds and streams audio to other AuraCast devices on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_auracast._udp</string>
+	</array>
+</dict>
+</plist>
