@@ -134,17 +134,10 @@ pub fn list_outputs() -> Vec<OutputDevice> {
 pub struct CaptureTarget {
     pub device: cpal::Device,
     pub config: cpal::SupportedStreamConfig,
-    /// Anything that must outlive the stream (e.g. the macOS system-audio tap)
-    pub _keepalive: Option<Box<dyn std::any::Any + Send>>,
 }
 
 pub fn resolve_source(id: Option<&str>) -> Result<CaptureTarget, String> {
     let host = cpal::default_host();
-
-    #[cfg(target_os = "macos")]
-    if id == Some(MAC_SYSTEM_ID) {
-        return open_mac_system_audio(&host);
-    }
 
     let (device, loopback) = match id {
         Some(id) if id.starts_with(LOOPBACK_PREFIX) => {
@@ -179,38 +172,7 @@ pub fn resolve_source(id: Option<&str>) -> Result<CaptureTarget, String> {
     }
     .map_err(|e| format!("Could not read audio input format: {e}"))?;
 
-    Ok(CaptureTarget {
-        device,
-        config,
-        _keepalive: None,
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn open_mac_system_audio(host: &cpal::Host) -> Result<CaptureTarget, String> {
-    use crate::macos_tap::{SystemTap, DEVICE_NAME};
-    let tap = SystemTap::create()?;
-    // The tap is exposed through a private aggregate device, which can take a moment to appear
-    let device = (0..40)
-        .find_map(|_| {
-            let found = host
-                .input_devices()
-                .ok()?
-                .find(|d| d.name().ok().as_deref() == Some(DEVICE_NAME));
-            if found.is_none() {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            found
-        })
-        .ok_or("The system audio capture device did not appear")?;
-    let config = device
-        .default_input_config()
-        .map_err(|e| format!("Could not read system audio format: {e}"))?;
-    Ok(CaptureTarget {
-        device,
-        config,
-        _keepalive: Some(Box::new(tap)),
-    })
+    Ok(CaptureTarget { device, config })
 }
 
 pub fn resolve_output(name: Option<&str>) -> Result<cpal::Device, String> {

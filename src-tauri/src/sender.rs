@@ -61,6 +61,27 @@ impl Sender {
                     generate_tone(pcm_tx, capture_stop_rx);
                     return;
                 }
+                #[cfg(target_os = "macos")]
+                if source_id.as_deref() == Some(audio::MAC_SYSTEM_ID) {
+                    let started = crate::macos_tap::SystemTap::create().and_then(|tap| {
+                        let (rate, channels) = tap.format()?;
+                        let capture = tap.start(pcm_tx)?;
+                        Ok((tap, capture, rate, channels))
+                    });
+                    match started {
+                        Ok((tap, capture, rate, channels)) => {
+                            let _ = ready_tx.send(Ok((rate, channels, "System audio".into())));
+                            let _ = capture_stop_rx.recv();
+                            // Stop reading before tearing down the tap
+                            drop(capture);
+                            drop(tap);
+                        }
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(e));
+                        }
+                    }
+                    return;
+                }
                 #[cfg(target_os = "android")]
                 if source_id.as_deref() == Some(audio::ANDROID_SYSTEM_ID) {
                     // Kotlin's playback-capture service pushes 48 kHz stereo into this channel
@@ -79,13 +100,10 @@ impl Sender {
                 });
                 match started {
                     Ok((stream, target)) => {
-                        let label = match source_id.as_deref() {
-                            Some(id) if id.starts_with("system:") => "System audio".into(),
-                            _ => target
-                                .device
-                                .name()
-                                .unwrap_or_else(|_| "Audio input".into()),
-                        };
+                        let label = target
+                            .device
+                            .name()
+                            .unwrap_or_else(|_| "Audio input".into());
                         let _ = ready_tx.send(Ok((
                             target.config.sample_rate().0,
                             target.config.channels() as usize,
@@ -93,9 +111,7 @@ impl Sender {
                         )));
                         // Park until asked to stop (or the Sender is dropped)
                         let _ = capture_stop_rx.recv();
-                        // Stream first: it reads from the device the target may be keeping alive
                         drop(stream);
-                        drop(target);
                     }
                     Err(e) => {
                         let _ = ready_tx.send(Err(e));

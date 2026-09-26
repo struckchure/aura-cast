@@ -1,8 +1,9 @@
 //! macOS system-audio capture with Core Audio process taps (macOS 14.2+).
 //!
-//! A tap mirrors everything the Mac is playing. Wrapping it in a private
-//! aggregate device makes it look like an ordinary input device, which cpal
-//! can then open. Both are destroyed when the `SystemTap` is dropped.
+//! A tap mirrors everything the Mac is playing. It is read through a private
+//! aggregate device with our own IOProc, not through an input AudioUnit (as
+//! cpal would): that path counts as microphone use and triggers the
+//! microphone prompt, while this one only needs "System Audio Recording".
 //!
 //! The tap APIs are looked up at runtime so the app still launches on older
 //! macOS versions; there this source is simply not offered.
@@ -17,6 +18,7 @@ use objc2::msg_send;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
 use std::ffi::{c_char, c_void};
+use std::sync::mpsc::SyncSender;
 
 type AudioObjectID = u32;
 type OSStatus = i32;
@@ -38,9 +40,9 @@ const ELEMENT_MAIN: u32 = 0;
 const PROP_TRANSLATE_PID: u32 = fourcc(b"id2p");
 const PROP_DEFAULT_OUTPUT: u32 = fourcc(b"dOut");
 const PROP_DEVICE_UID: u32 = fourcc(b"uid ");
+const PROP_TAP_FORMAT: u32 = fourcc(b"tfmt");
 
-/// Name of the aggregate device; cpal finds it by this name.
-pub const DEVICE_NAME: &str = "AuraCast System Audio";
+const DEVICE_NAME: &str = "AuraCast System Audio";
 
 #[link(name = "CoreAudio", kind = "framework")]
 extern "C" {
@@ -57,7 +59,55 @@ extern "C" {
         device: *mut AudioObjectID,
     ) -> OSStatus;
     fn AudioHardwareDestroyAggregateDevice(device: AudioObjectID) -> OSStatus;
+    fn AudioDeviceCreateIOProcID(
+        device: AudioObjectID,
+        proc_: IOProc,
+        client_data: *mut c_void,
+        proc_id: *mut *mut c_void,
+    ) -> OSStatus;
+    fn AudioDeviceDestroyIOProcID(device: AudioObjectID, proc_id: *mut c_void) -> OSStatus;
+    fn AudioDeviceStart(device: AudioObjectID, proc_id: *mut c_void) -> OSStatus;
+    fn AudioDeviceStop(device: AudioObjectID, proc_id: *mut c_void) -> OSStatus;
 }
+
+#[repr(C)]
+struct AudioBuffer {
+    channels: u32,
+    byte_size: u32,
+    data: *mut c_void,
+}
+
+#[repr(C)]
+struct AudioBufferList {
+    count: u32,
+    buffers: [AudioBuffer; 1], // variable length
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct StreamDescription {
+    sample_rate: f64,
+    format_id: u32,
+    format_flags: u32,
+    bytes_per_packet: u32,
+    frames_per_packet: u32,
+    bytes_per_frame: u32,
+    channels_per_frame: u32,
+    bits_per_channel: u32,
+    reserved: u32,
+}
+
+const FORMAT_FLAG_FLOAT: u32 = 1;
+
+type IOProc = unsafe extern "C" fn(
+    device: AudioObjectID,
+    now: *const c_void,
+    input: *const AudioBufferList,
+    input_time: *const c_void,
+    output: *mut AudioBufferList,
+    output_time: *const c_void,
+    client_data: *mut c_void,
+) -> OSStatus;
 
 extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
@@ -149,6 +199,119 @@ impl SystemTap {
             }
         }
     }
+}
+
+struct CaptureState {
+    tx: SyncSender<Vec<f32>>,
+    interleaved: bool,
+}
+
+/// A running capture; stops when dropped.
+pub struct TapCapture {
+    device: AudioObjectID,
+    proc_id: *mut c_void,
+    state: *mut CaptureState,
+}
+
+unsafe impl Send for TapCapture {}
+
+impl SystemTap {
+    /// Sample rate and channel count of the audio `start` delivers (interleaved f32).
+    pub fn format(&self) -> Result<(u32, usize), String> {
+        let format = unsafe { get_property::<StreamDescription>(self.tap, PROP_TAP_FORMAT, None) }
+            .ok_or("Could not read the system audio format")?;
+        if format.format_flags & FORMAT_FLAG_FLOAT == 0 || format.bits_per_channel != 32 {
+            return Err("Unsupported system audio format".into());
+        }
+        Ok((
+            format.sample_rate as u32,
+            format.channels_per_frame as usize,
+        ))
+    }
+
+    /// Start delivering interleaved f32 chunks to `tx`.
+    pub fn start(&self, tx: SyncSender<Vec<f32>>) -> Result<TapCapture, String> {
+        let format = unsafe { get_property::<StreamDescription>(self.tap, PROP_TAP_FORMAT, None) }
+            .ok_or("Could not read the system audio format")?;
+        let state = Box::into_raw(Box::new(CaptureState {
+            tx,
+            interleaved: format.format_flags & (1 << 5) == 0,
+        }));
+        unsafe {
+            let mut proc_id: *mut c_void = std::ptr::null_mut();
+            let status =
+                AudioDeviceCreateIOProcID(self.aggregate, io_proc, state.cast(), &mut proc_id);
+            if status != 0 {
+                drop(Box::from_raw(state));
+                return Err(format!(
+                    "Could not start system audio capture (error {status})"
+                ));
+            }
+            let status = AudioDeviceStart(self.aggregate, proc_id);
+            if status != 0 {
+                AudioDeviceDestroyIOProcID(self.aggregate, proc_id);
+                drop(Box::from_raw(state));
+                return Err(format!(
+                    "Could not start system audio capture (error {status})"
+                ));
+            }
+            Ok(TapCapture {
+                device: self.aggregate,
+                proc_id,
+                state,
+            })
+        }
+    }
+}
+
+impl Drop for TapCapture {
+    fn drop(&mut self) {
+        unsafe {
+            // Stop and destroy wait for any in-flight callback, so freeing the state after is safe
+            AudioDeviceStop(self.device, self.proc_id);
+            AudioDeviceDestroyIOProcID(self.device, self.proc_id);
+            drop(Box::from_raw(self.state));
+        }
+    }
+}
+
+unsafe extern "C" fn io_proc(
+    _device: AudioObjectID,
+    _now: *const c_void,
+    input: *const AudioBufferList,
+    _input_time: *const c_void,
+    _output: *mut AudioBufferList,
+    _output_time: *const c_void,
+    client_data: *mut c_void,
+) -> OSStatus {
+    let state = &*(client_data as *const CaptureState);
+    let Some(list) = input.as_ref() else { return 0 };
+    let buffers = std::slice::from_raw_parts(list.buffers.as_ptr(), list.count as usize);
+
+    let chunk = if state.interleaved || buffers.len() == 1 {
+        let Some(buf) = buffers.first().filter(|b| !b.data.is_null()) else {
+            return 0;
+        };
+        std::slice::from_raw_parts(buf.data as *const f32, buf.byte_size as usize / 4).to_vec()
+    } else {
+        // One buffer per channel: interleave them
+        let planes: Vec<&[f32]> = buffers
+            .iter()
+            .filter(|b| !b.data.is_null())
+            .map(|b| std::slice::from_raw_parts(b.data as *const f32, b.byte_size as usize / 4))
+            .collect();
+        let frames = planes.iter().map(|p| p.len()).min().unwrap_or(0);
+        let mut out = Vec::with_capacity(frames * planes.len());
+        for i in 0..frames {
+            for plane in &planes {
+                out.push(plane[i]);
+            }
+        }
+        out
+    };
+    // Drop audio rather than block Core Audio's real-time thread
+    let _ = state.tx.try_send(chunk);
+    0
 }
 
 impl Drop for SystemTap {
@@ -250,4 +413,30 @@ unsafe fn default_output_uid() -> Option<String> {
         get_property::<usize>(device, PROP_DEVICE_UID, None).filter(|p| *p != 0)? as CFStringRef;
     // The UID is returned retained ("Copy" semantics)
     Some(CFString::wrap_under_create_rule(uid).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Manual: `cargo test tap_delivers_audio -- --ignored --nocapture` while audio plays.
+    #[test]
+    #[ignore = "manual tool; needs System Audio Recording permission"]
+    fn tap_delivers_audio() {
+        let tap = SystemTap::create().expect("tap");
+        println!("format: {:?}", tap.format());
+        let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+        let capture = tap.start(tx).expect("start");
+        let (mut chunks, mut samples, mut peak) = (0usize, 0usize, 0f32);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if let Ok(chunk) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                chunks += 1;
+                samples += chunk.len();
+                peak = chunk.iter().fold(peak, |p, s| p.max(s.abs()));
+            }
+        }
+        drop(capture);
+        println!("chunks={chunks} samples={samples} peak={peak}");
+    }
 }
