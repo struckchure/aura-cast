@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # CMake 4 on the runners rejects libopus's (audiopus_sys) cmake_minimum_required < 3.5
+  CMAKE_POLICY_VERSION_MINIMUM: '3.5'
+
 jobs:
   # ==========================================
   # JOB 1: Build Desktop (Windows & macOS)
