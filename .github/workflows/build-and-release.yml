@@ -1,0 +1,178 @@
+name: Build and Release Multiplatform AuraCast (Windows, macOS, Android)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================
+  # JOB 1: Build Desktop (Windows & macOS)
+  # ==========================================
+  build-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-latest'
+            args: ''
+            target: 'x86_64-pc-windows-msvc'
+            artifact-name: 'auracast-windows-x64'
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+            target: 'universal-apple-darwin'
+            artifact-name: 'auracast-macos-universal'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Frontend Dependencies
+        run: npm ci || npm install
+
+      - name: Build Web Frontend
+        run: npm run build
+
+      - name: Install Tauri CLI
+        run: npm install -D @tauri-apps/cli@next
+
+      - name: Build Tauri Desktop Binary
+        run: npx tauri build ${{ matrix.args }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Desktop Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+            src-tauri/target/**/bundle/msi/*.msi
+            src-tauri/target/**/bundle/nsis/*.exe
+            src-tauri/target/**/bundle/dmg/*.dmg
+            src-tauri/target/**/bundle/macos/*.app
+          if-no-files-found: warn
+
+  # ==========================================
+  # JOB 2: Build Mobile (Android APK)
+  # ==========================================
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK and Build-Tools
+        run: |
+          sdkmanager --install "ndk;26.1.10909125" "build-tools;34.0.0" "platforms;android-34"
+
+      - name: Install Rust Stable & Android Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Set Android Environment Variables
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      - name: Install Frontend Dependencies
+        run: npm ci || npm install
+
+      - name: Build Web Frontend
+        run: npm run build
+
+      - name: Install Tauri CLI
+        run: npm install -D @tauri-apps/cli@next
+
+      - name: Initialize Android Tauri Project
+        run: npx tauri android init
+
+      - name: Build Android Release APK
+        run: npx tauri android build --apk
+        env:
+          NDK_HOME: ${{ env.NDK_HOME }}
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auracast-android-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
+
+  # ==========================================
+  # JOB 3: Publish Unified GitHub Release
+  # ==========================================
+  release:
+    needs: [build-desktop, build-android]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create GitHub Release with Binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.3.${{ github.run_number }}
+          name: 'AuraCast Release v2.3.${{ github.run_number }}'
+          body: |
+            ## AuraCast Wireless Audio Speaker Release
+            
+            ### Included Multiplatform Binaries:
+            - **Android**: \`app-universal-release.apk\` (Low-latency audio sink & source)
+            - **Windows**: \`AuraCast_x64_en-US.msi\` & \`.exe\` (WASAPI audio driver)
+            - **macOS**: \`AuraCast_universal.dmg\` (Apple Silicon M1/M2/M3/M4 & Intel CoreAudio)
+            
+            *Automatically built by GitHub Actions on push to \`main\`.*
+          files: |
+            release-artifacts/**/*.apk
+            release-artifacts/**/*.msi
+            release-artifacts/**/*.exe
+            release-artifacts/**/*.dmg
+            release-artifacts/**/*.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

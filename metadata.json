@@ -1,0 +1,6 @@
+{
+  "name": "AuraCast - Tauri Wireless Audio Speaker",
+  "description": "Tauri desktop and mobile app prototype that turns any device into a high-fidelity Bluetooth A2DP & Wi-Fi wireless speaker receiver and multi-room audio transmitter.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

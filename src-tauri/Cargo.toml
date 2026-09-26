@@ -1,0 +1,37 @@
+[package]
+name = "auracast-speaker"
+version = "0.1.0"
+description = "Turn desktop or mobile devices into high-fidelity Bluetooth & Wi-Fi speakers"
+authors = ["AuraCast Audio Lab"]
+edition = "2021"
+
+[lib]
+name = "auracast_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = ["tray-icon"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.37", features = ["full"] }
+
+# Low-latency Cross-platform Audio I/O
+cpal = "0.15"
+
+# Codec & Decoding
+symphonia = { version = "0.5", features = ["all"] }
+opus = "0.3"
+
+# Network Discovery & Multicast
+mdns-sd = "0.11"
+
+# Linux BlueZ Bluetooth A2DP Sink (Target: Linux / Raspberry Pi)
+[target.'cfg(target_os = "linux")'.dependencies]
+bluez-async = "0.8"
+
+# macOS & iOS CoreBluetooth (Target: Apple)
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2 = "0.5"
