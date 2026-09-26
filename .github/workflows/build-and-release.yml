@@ -130,12 +130,39 @@ jobs:
         env:
           NDK_HOME: ${{ env.NDK_HOME }}
 
+      # Gradle emits an unsigned release APK, which Android refuses to install
+      - name: Sign Android Release APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set; cannot sign the release APK"
+            exit 1
+          fi
+          APK_DIR=src-tauri/gen/android/app/build/outputs/apk/universal/release
+          BUILD_TOOLS=$ANDROID_HOME/build-tools/34.0.0
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$APK_DIR/app-universal-release-unsigned.apk" "$RUNNER_TEMP/aligned.apk"
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --out "$APK_DIR/AuraCast-universal-release.apk" \
+            "$RUNNER_TEMP/aligned.apk"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK_DIR/AuraCast-universal-release.apk"
+          # Ship only the signed APK
+          rm -f "$APK_DIR/app-universal-release-unsigned.apk" "$APK_DIR"/*.idsig "$RUNNER_TEMP/release.keystore"
+
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: auracast-android-apk
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # ==========================================
   # JOB 3: Publish Unified GitHub Release
@@ -163,7 +190,7 @@ jobs:
             ## AuraCast Wireless Audio Speaker Release
             
             ### Included Multiplatform Binaries:
-            - **Android**: \`app-universal-release.apk\` (Low-latency audio sink & source)
+            - **Android**: \`AuraCast-universal-release.apk\` (Low-latency audio sink & source)
             - **Windows**: \`AuraCast_x64_en-US.msi\` & \`.exe\` (WASAPI audio driver)
             - **macOS**: \`AuraCast_universal.dmg\` (Apple Silicon M1/M2/M3/M4 & Intel CoreAudio)
             
