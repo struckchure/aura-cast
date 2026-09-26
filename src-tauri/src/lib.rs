@@ -10,6 +10,8 @@ mod android;
 mod audio;
 mod discovery;
 mod events;
+#[cfg(target_os = "macos")]
+mod macos_tap;
 mod protocol;
 mod receiver;
 mod sender;
@@ -344,6 +346,36 @@ mod tests {
             local_ip()
         );
         std::thread::sleep(std::time::Duration::from_secs(seconds_from_env()));
+    }
+
+    /// Manual testing: capture this Mac's system audio for a few seconds and
+    /// report the level (play something while it runs).
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "manual tool"]
+    fn manual_mac_system_audio_level() {
+        let levels = Arc::new(Mutex::new(Vec::new()));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let sink: events::EventSink = {
+            let (levels, errors) = (levels.clone(), errors.clone());
+            Arc::new(move |event| match event {
+                Event::SenderStats(s) => levels.lock().unwrap().push(s.level),
+                Event::StreamError(e) => errors.lock().unwrap().push(e),
+                _ => {}
+            })
+        };
+        let sender = Sender::start(sink, Some(audio::MAC_SYSTEM_ID.into()))
+            .expect("system audio capture starts");
+        println!("capturing: {}", sender.source_label);
+        std::thread::sleep(std::time::Duration::from_secs(seconds_from_env()));
+        drop(sender);
+        let levels = levels.lock().unwrap();
+        let peak = levels.iter().cloned().fold(0f32, f32::max);
+        println!(
+            "stats={} peak level={peak:.2} errors={:?}",
+            levels.len(),
+            errors.lock().unwrap()
+        );
     }
 
     /// Manual testing: listen to `AURACAST_ADDR` and print receiver stats.

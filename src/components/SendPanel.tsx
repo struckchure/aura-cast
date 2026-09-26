@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react';
 import {Copy, Mic, Monitor, Radio, RefreshCw, Square, Users, Waves} from 'lucide-react';
 import {api, errorMessage, events, type AudioSource, type SenderStats, type SendingInfo} from '../lib/api';
+import {android} from '../lib/android';
 import {useTauriEvent} from '../lib/useTauriEvent';
 import {LevelMeter} from './LevelMeter';
 
@@ -37,11 +38,23 @@ export function SendPanel({initialSending, os, onError}: Props) {
 
   useTauriEvent(events.onSenderStats, setStats);
 
+  const selected = sources.find((s) => s.id === sourceId);
+
   const start = async () => {
     setBusy(true);
     try {
+      // Android permissions and the system-audio consent screen are handled natively
+      if (android.isAndroid() && selected?.kind === 'microphone' && !(await android.requestMicrophone())) {
+        onError('AuraCast needs microphone access to broadcast your microphone. You can allow it in Settings > Apps > AuraCast.');
+        return;
+      }
+      if (android.isAndroid() && selected?.kind === 'system' && !(await android.startSystemAudio())) {
+        onError('Sharing this phone\u2019s audio was not allowed.');
+        return;
+      }
       setSending(await api.startSending(sourceId));
     } catch (err) {
+      if (selected?.kind === 'system') android.stopSystemAudio();
       onError(errorMessage(err));
     } finally {
       setBusy(false);
@@ -51,6 +64,7 @@ export function SendPanel({initialSending, os, onError}: Props) {
   const stop = async () => {
     setBusy(true);
     try {
+      android.stopSystemAudio();
       await api.stopSending();
       setSending(null);
       setStats(null);
@@ -122,7 +136,17 @@ export function SendPanel({initialSending, os, onError}: Props) {
     );
   }
 
-  const noSystemAudio = os === 'macos' || os === 'android' || os === 'ios';
+  const hasSystemAudio = sources.some((s) => s.kind === 'system');
+  const hint =
+    selected?.kind === 'system'
+      ? os === 'macos'
+        ? 'macOS asks for permission to record system audio the first time. Everything playing on this Mac is shared; AuraCast\u2019s own sound is left out.'
+        : os === 'android'
+          ? 'Android asks you to confirm before sharing starts. Some apps (and calls) do not allow their audio to be shared.'
+          : null
+      : !hasSystemAudio && os === 'macos'
+        ? 'Sharing system audio needs macOS 14.2 or later. On older versions, install a loopback driver such as BlackHole, set it as your sound output, and pick it here.'
+        : null;
 
   return (
     <section className="space-y-4">
@@ -153,13 +177,7 @@ export function SendPanel({initialSending, os, onError}: Props) {
           })}
           {sources.length === 0 && <p className="text-sm text-neutral-500">No audio inputs found.</p>}
         </div>
-        {noSystemAudio && (
-          <p className="mt-3 text-xs leading-relaxed text-neutral-500">
-            {os === 'macos'
-              ? 'macOS does not let apps capture system audio directly. To share music from this Mac, install a loopback driver such as BlackHole, set it as your sound output, and pick it here.'
-              : 'This device can share its microphone. Sharing other apps’ audio is not supported here.'}
-          </p>
-        )}
+        {hint && <p className="mt-3 text-xs leading-relaxed text-neutral-500">{hint}</p>}
       </div>
 
       <button

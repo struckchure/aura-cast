@@ -5,6 +5,8 @@
 	<!-- Merged into the app bundle's Info.plist by Tauri -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>AuraCast streams audio from your microphone or audio input to other devices on your network.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>AuraCast streams the audio playing on this Mac to your other devices when you choose to share system audio.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>AuraCast finds and streams audio to other AuraCast devices on your local network.</string>
 	<key>NSBonjourServices</key>

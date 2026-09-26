@@ -113,10 +113,12 @@ dependencies = [
 name = "auracast-speaker"
 version = "0.1.0"
 dependencies = [
+ "core-foundation",
  "cpal",
  "jni",
  "mdns-sd",
  "ndk-context",
+ "objc2",
  "opus",
  "serde",
  "tauri",

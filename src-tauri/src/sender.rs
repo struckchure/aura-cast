@@ -61,28 +61,41 @@ impl Sender {
                     generate_tone(pcm_tx, capture_stop_rx);
                     return;
                 }
+                #[cfg(target_os = "android")]
+                if source_id.as_deref() == Some(audio::ANDROID_SYSTEM_ID) {
+                    // Kotlin's playback-capture service pushes 48 kHz stereo into this channel
+                    crate::android::set_system_audio_sink(Some(pcm_tx));
+                    let _ = ready_tx.send(Ok((SAMPLE_RATE, CHANNELS, "System audio".into())));
+                    let _ = capture_stop_rx.recv();
+                    crate::android::set_system_audio_sink(None);
+                    return;
+                }
                 let started = audio::resolve_source(source_id.as_deref()).and_then(|target| {
                     let stream = build_input(&target, pcm_tx)?;
                     stream
                         .play()
                         .map_err(|e| format!("Could not start audio capture: {e}"))?;
-                    let label = target
-                        .device
-                        .name()
-                        .unwrap_or_else(|_| "Audio input".into());
-                    Ok((
-                        stream,
-                        target.config.sample_rate().0,
-                        target.config.channels() as usize,
-                        label,
-                    ))
+                    Ok((stream, target))
                 });
                 match started {
-                    Ok((stream, rate, channels, label)) => {
-                        let _ = ready_tx.send(Ok((rate, channels, label)));
+                    Ok((stream, target)) => {
+                        let label = match source_id.as_deref() {
+                            Some(id) if id.starts_with("system:") => "System audio".into(),
+                            _ => target
+                                .device
+                                .name()
+                                .unwrap_or_else(|_| "Audio input".into()),
+                        };
+                        let _ = ready_tx.send(Ok((
+                            target.config.sample_rate().0,
+                            target.config.channels() as usize,
+                            label,
+                        )));
                         // Park until asked to stop (or the Sender is dropped)
                         let _ = capture_stop_rx.recv();
+                        // Stream first: it reads from the device the target may be keeping alive
                         drop(stream);
+                        drop(target);
                     }
                     Err(e) => {
                         let _ = ready_tx.send(Err(e));
