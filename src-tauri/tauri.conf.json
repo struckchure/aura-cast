@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "identifier": "com.auracast.speaker",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -19,8 +19,8 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "transparent": true,
-        "decorations": false
+        "transparent": false,
+        "decorations": true
       }
     ],
     "security": {
@@ -31,8 +31,11 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "../public/pwa-192x192.png",
-      "../public/pwa-512x512.png"
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ]
   }
 }
